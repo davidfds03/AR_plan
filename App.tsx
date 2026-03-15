@@ -199,39 +199,55 @@ const App: React.FC = () => {
   }, [selectedCategory]);
 
   // Deep Link Handling for AR QR Scanner
-  // Deep Link Handling for AR QR Scanner
 useEffect(() => {
-
   const params = new URLSearchParams(window.location.search);
-  const target = params.get("target");
-  const id = params.get("id");
+  const target = params.get('target');
+  const id = params.get('id');
+  const items = params.get('items');
 
-  if (target === "ar" && id) {
+  if (target === 'ar' && (id || items)) {
+    console.log('AR Deep Link detected:', id || items);
 
-    console.log("AR Deep Link detected:", id);
+    // MULTI ITEM MODE (wishlist AR)
+    if (items) {
+      const firstId = items.split(',')[0];
+      const product = PRODUCTS.find((p: any) => p.ID === firstId);
 
-    const product = PRODUCTS.find((p: any) => p.ID === id);
-
-    if (product) {
-
-      setSelectedProduct({
-        id: product.ID,
-        name: product.Name,
-        price: product.Price,
-        category: product.Type,
-        subcategory: product.SubType,
-        model: product.ModelURL,
-        image: product.ImageURL
-      });
-
-      setActiveTab("ar");
-
-    } else {
-      console.warn("Product not found:", id);
+      if (product) {
+        setSelectedProduct({
+          id: product.ID,
+          name: product.Name,
+          price: product.Price,
+          category: product.Type || product.category,
+          subcategory: product.SubType || product.subcategory,
+          model: product.ModelURL || product.model,
+          image: product.ImageURL || product.image,
+        });
+        setActiveTab('ar');
+      } else {
+        console.warn('Product not found for id:', firstId);
+      }
     }
 
+    // SINGLE PRODUCT MODE
+    else if (id) {
+      const product = PRODUCTS.find((p: any) => p.ID === id);
+      if (product) {
+        setSelectedProduct({
+          id: product.ID,
+          name: product.Name,
+          price: product.Price,
+          category: product.Type || product.category,
+          subcategory: product.SubType || product.subcategory,
+          model: product.ModelURL || product.model,
+          image: product.ImageURL || product.image,
+        });
+        setActiveTab('ar');
+      } else {
+        console.warn('Product not found for id:', id);
+      }
+    }
   }
-
 }, []);
 
   const filteredProducts = useMemo(() => {
@@ -315,7 +331,7 @@ useEffect(() => {
       await supabase.from('CartItem').delete().eq('cartId', cartObj.id).eq('productId', id);
     }
   };
-
+  
   const updateCartQty = async (id: string, delta: number) => {
     setCart(prev => prev.map(item =>
       item.id === id ? { ...item, qty: Math.max(1, item.qty + delta) } : item
@@ -978,7 +994,7 @@ useEffect(() => {
 
       {activeTab === 'ar' && (
         <div className="pt-24 min-h-screen animate-in fade-in duration-700">
-          <ARPage productId={selectedProduct?.id} />
+          <ARPage />
         </div>
       )}
     </div>
