@@ -2,6 +2,7 @@ import React, { useEffect, useState, Suspense } from "react";
 const ARScene = React.lazy(() => import("./ARScene"));
 const MultiARScene = React.lazy(() => import("./MultiARScene"));
 import "./ar.css";
+import ErrorBoundary from "./ErrorBoundary";
 import productsData from "../real_compare/real_compare/planpro_data_2.json";
 
 const PRODUCTS: any = productsData;
@@ -63,21 +64,28 @@ const ARPage: React.FC<ARPageProps> = ({ productId }) => {
   // Ensure we only attempt to render AR components in the browser
   if (typeof window === "undefined") return null;
 
-  if (models) {
-    return (
+  if (models && models.length > 0) {
+  return (
+    <ErrorBoundary>
       <Suspense fallback={<div>Loading AR...</div>}>
         <MultiARScene models={models} />
       </Suspense>
-    );
-  }
-
-  if (!modelPath) return <div>Loading AR...</div>;
-
-  return (
-    <Suspense fallback={<div>Loading AR...</div>}>
-      <ARScene model={modelPath} />
-    </Suspense>
+    </ErrorBoundary>
   );
+}
+
+if (modelPath) {
+  return (
+    <ErrorBoundary>
+      <Suspense fallback={<div>Loading AR...</div>}>
+        <ARScene model={modelPath} />
+      </Suspense>
+    </ErrorBoundary>
+  );
+}
+
+return <div>Loading AR...</div>;
+
 };
 
 export default ARPage;
