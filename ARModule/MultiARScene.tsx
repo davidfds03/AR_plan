@@ -1,11 +1,15 @@
 import React, { useState, Suspense, useEffect } from "react";
 import { Canvas } from "@react-three/fiber";
-import { XR, ARButton } from "@react-three/xr";
+import { XR, ARButton, createXRStore } from "@react-three/xr";
 import { useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 
-function Model({ url, position }) {
-  const { scene } = useGLTF(url);
+const store = createXRStore();
+
+function Model({ url, position }: { url: string; position: any }) {
+  // useGLTF may return different shapes; cast to any to access `scene` safely
+  const gltf: any = useGLTF(url);
+  const scene = gltf?.scene ?? (Array.isArray(gltf) ? gltf[0]?.scene : undefined);
   return <primitive object={scene} position={position} scale={1} />;
 }
 
@@ -56,8 +60,21 @@ export default function MultiARScene({ models }: { models: string[] }) {
     }
   }, []);
 
-  if (!(navigator && "xr" in navigator)) {
+  // If navigator.xr is not present, tell the user to open on a WebXR-capable device.
+  if (xrPresent === false) {
     return <div>Open this on a mobile device with WebXR support.</div>;
+  }
+
+  // If we determined that immersive-ar is not supported, show a clear message.
+  if (xrSupported === false) {
+    return (
+      <div>
+        WebXR 'immersive-ar' not supported on this device/browser.
+        {secureContext === false && (
+          <div>This page must be served over HTTPS (secure context) for WebXR.</div>
+        )}
+      </div>
+    );
   }
 
   const handlePlace = () => {
@@ -70,7 +87,17 @@ export default function MultiARScene({ models }: { models: string[] }) {
 
   return (
     <>
-      <ARButton />
+      {/* Only render ARButton when we know immersive-ar is supported and page is secure. */}
+      {xrSupported && secureContext && (
+        <div style={{ position: "absolute", top: 20, right: 20, zIndex: 2000 }}>
+          <button
+  style={{ position: "absolute", top: 20, right: 20, zIndex: 2000 }}
+  onClick={() => store.enterAR()}
+>
+  Enter AR
+</button>
+        </div>
+      )}
 
       <button
         style={{ position: "absolute", top: 20, left: 20, zIndex: 10 }}
@@ -80,7 +107,7 @@ export default function MultiARScene({ models }: { models: string[] }) {
       </button>
 
       <Canvas>
-        <XR>
+        <XR store={store}>
           <ambientLight intensity={1} />
 
           <Suspense fallback={null}>
