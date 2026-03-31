@@ -10,8 +10,8 @@ export default defineConfig(({ mode }) => {
       port: 3000,
       host: true,
       https: {
-        key: fs.readFileSync('./localhost+1-key.pem'),
-        cert: fs.readFileSync('./localhost+1.pem')
+        key: fs.readFileSync('./localhost+2-key.pem'),
+        cert: fs.readFileSync('./localhost+2.pem')
       }
     },
     plugins: [react()],

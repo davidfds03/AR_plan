@@ -30,7 +30,7 @@ const ARPage: React.FC<ARPageProps> = ({ productId }) => {
       const modelsArr = ids.map(id => {
         const p = PRODUCTS.find((x: any) => x.ID === id);
         if (!p) return null;
-        return `/models/${p.ModelURL.replace("products/", "")}`;
+        return `/models/${p.ModelURL.replace("products/", "").replaceAll(" ", "%20")}`;
       }).filter(Boolean) as string[];
 
       if (modelsArr.length > 0) {
