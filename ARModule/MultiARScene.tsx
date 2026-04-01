@@ -5,8 +5,9 @@ import { useGLTF, OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 
 
-function Model({ url, position, index, draggable, onPointerDown, onPointerMove, onPointerUp }: { url: string; position: THREE.Vector3; index?: number; draggable?: boolean; onPointerDown?: (e: any, i?: number)=>void; onPointerMove?: (e: any, i?: number)=>void; onPointerUp?: (e: any, i?: number)=>void }) {
+function Model({ url, position, index, draggable, onPointerDown, onPointerMove, onPointerUp, onLoadSize }: { url: string; position: THREE.Vector3; index?: number; draggable?: boolean; onPointerDown?: (e: any, i?: number)=>void; onPointerMove?: (e: any, i?: number)=>void; onPointerUp?: (e: any, i?: number)=>void; onLoadSize?: (i:number, size:THREE.Vector3)=>void }) {
   const ref = React.useRef<THREE.Group | null>(null);
+  const reportedRef = React.useRef(false);
 
   // defensive read of the glTF result
   const gltf: any = useGLTF(url);
@@ -16,6 +17,22 @@ function Model({ url, position, index, draggable, onPointerDown, onPointerMove, 
 
   // Ensure the loaded scene's internal position is reset so the wrapper group's position controls placement
   scene.position.set(0, 0, 0);
+
+  // compute bounding box and report size once
+  React.useEffect(() => {
+    if (reportedRef.current) return;
+    try {
+      const box = new THREE.Box3().setFromObject(scene);
+      const size = new THREE.Vector3();
+      box.getSize(size);
+      if (onLoadSize && typeof index === 'number') {
+        onLoadSize(index, size);
+        reportedRef.current = true;
+      }
+    } catch (err) {
+      // ignore errors measuring
+    }
+  }, [scene, index, onLoadSize]);
 
   return (
     <group
@@ -45,7 +62,7 @@ function Model({ url, position, index, draggable, onPointerDown, onPointerMove, 
   );
 }
 
-function Scene({ models, placed, selectedIndex, onDragStart, onDragMove, onDragEnd }: { models: string[]; placed: { url: string; position: THREE.Vector3 }[]; selectedIndex: number; onDragStart: (i:number, e:any)=>void; onDragMove: (i:number, e:any)=>void; onDragEnd: (i:number, e:any)=>void }) {
+function Scene({ models, placed, selectedIndex, onDragStart, onDragMove, onDragEnd, onLoadSize }: { models: string[]; placed: { url: string; position: THREE.Vector3 }[]; selectedIndex: number; onDragStart: (i:number, e:any)=>void; onDragMove: (i:number, e:any)=>void; onDragEnd: (i:number, e:any)=>void; onLoadSize: (i:number, size:THREE.Vector3)=>void }) {
   const preview = placed.length === 0 && models && models.length > 0;
 
   return (
@@ -60,16 +77,19 @@ function Scene({ models, placed, selectedIndex, onDragStart, onDragMove, onDragE
             const center = (models.length - 1) / 2;
             const spacing = 0.6;
             const x = (i - center) * spacing;
-            return <Model key={m} url={m} position={new THREE.Vector3(x, 0, 0)} />;
+            return <Model key={m} url={m} index={i} onLoadSize={onLoadSize} position={new THREE.Vector3(x, 0, 0)} />;
           })
         ) : (
-          <Model url={models[selectedIndex]} position={new THREE.Vector3(0, 0, 0)} />
+          <Model url={models[selectedIndex]} index={selectedIndex} onLoadSize={onLoadSize} position={new THREE.Vector3(0, 0, 0)} />
         )
       )}
 
-      {placed.map((obj, i) => (
-        <Model key={i} url={obj.url} position={obj.position} index={i} draggable={true} onPointerDown={(e:any, idx?:number)=>onDragStart(idx!, e)} onPointerMove={(e:any, idx?:number)=>onDragMove(idx!, e)} onPointerUp={(e:any, idx?:number)=>onDragEnd(idx!, e)} />
-      ))}
+      {placed.map((obj, i) => {
+        const modelIndex = models.indexOf(obj.url);
+        return (
+          <Model key={i} url={obj.url} position={obj.position} index={modelIndex >= 0 ? modelIndex : undefined} draggable={true} onLoadSize={onLoadSize} onPointerDown={(e:any, idx?:number)=>onDragStart(i, e)} onPointerMove={(e:any, idx?:number)=>onDragMove(i, e)} onPointerUp={(e:any, idx?:number)=>onDragEnd(i, e)} />
+        );
+      })}
     </>
   );
 }
@@ -83,6 +103,7 @@ export default function MultiARScene({ models }: { models: string[] }) {
   const [placed, setPlaced] = useState<{ url: string; position: THREE.Vector3 }[]>([]);
   const [selectedIndex, setSelectedIndex] = useState<number>(0);
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
+  const [sizes, setSizes] = useState<(THREE.Vector3 | null)[]>(() => models.map(() => null));
 
   const [xrPresent, setXrPresent] = useState<boolean | null>(null);
   const [xrSupported, setXrSupported] = useState<boolean | null>(null);
@@ -113,6 +134,19 @@ export default function MultiARScene({ models }: { models: string[] }) {
       // eslint-disable-next-line no-console
       console.error('Error entering AR:', err);
     }
+  };
+
+  // reset sizes when models list changes
+  useEffect(() => {
+    setSizes(models.map(() => null));
+  }, [models]);
+
+  const onLoadSize = (index: number, size: THREE.Vector3) => {
+    setSizes(prev => {
+      const copy = prev.slice();
+      copy[index] = size;
+      return copy;
+    });
   };
 
   useEffect(() => {
@@ -165,25 +199,53 @@ export default function MultiARScene({ models }: { models: string[] }) {
   }
 
   const handlePlace = () => {
-    const spacing = 1.2;
-    const x = placed.length * spacing;
-    const pos = new THREE.Vector3(x, 0, -1.5);
+    const margin = 0.08;
+    const defaultWidth = 1.0;
+
+    const getWidthForUrl = (url: string) => {
+      const idx = models.indexOf(url);
+      if (idx === -1) return defaultWidth;
+      const s = sizes[idx];
+      return s ? Math.max(0.1, s.x) : defaultWidth;
+    };
 
     const model = models[selectedIndex];
+
+    // find right-most edge among placed objects
+    let maxRight = -Infinity;
+    for (const p of placed) {
+      const w = getWidthForUrl(p.url);
+      const right = p.position.x + w / 2;
+      if (right > maxRight) maxRight = right;
+    }
+
+    const newWidth = getWidthForUrl(model);
+    const x = (maxRight === -Infinity) ? 0 : (maxRight + newWidth / 2 + margin);
+    const pos = new THREE.Vector3(x, 0, -1.5);
 
     setPlaced((prev) => [...prev, { url: model, position: pos }]);
   };
 
   const handlePlaceAll = () => {
     if (!models || models.length === 0) return;
+    const margin = 0.08;
+    const defaultWidth = 1.0;
 
-    const center = (models.length - 1) / 2;
-    const spacing = 1.2;
+    const getWidthForIndex = (i: number) => {
+      const s = sizes[i];
+      return s ? Math.max(0.1, s.x) : defaultWidth;
+    };
 
-    const all = models.map((m, i) => ({
-      url: m,
-      position: new THREE.Vector3((i - center) * spacing, 0, -1.5)
-    }));
+    const widths = models.map((m, i) => getWidthForIndex(i));
+    const total = widths.reduce((a, b) => a + b, 0) + margin * (models.length - 1);
+    let x = -total / 2 + widths[0] / 2;
+    const z = -1.5;
+
+    const all = models.map((m, i) => {
+      const pos = new THREE.Vector3(x, 0, z);
+      x += widths[i] + margin;
+      return { url: m, position: pos };
+    });
 
     setPlaced((prev) => [...prev, ...all]);
   };
@@ -318,7 +380,7 @@ export default function MultiARScene({ models }: { models: string[] }) {
       <Canvas camera={{ position: [0, 1.5, 3], fov: 50 }} style={{ touchAction: 'none' }}>
         <XR store={store}>
               <Suspense fallback={null}>
-                <Scene models={models} placed={placed} selectedIndex={selectedIndex} onDragStart={onDragStart} onDragMove={onDragMove} onDragEnd={onDragEnd} />
+                <Scene models={models} placed={placed} selectedIndex={selectedIndex} onDragStart={onDragStart} onDragMove={onDragMove} onDragEnd={onDragEnd} onLoadSize={onLoadSize} />
               </Suspense>
           </XR>
           <OrbitControls enableRotate={draggingIndex === null} enablePan={draggingIndex === null} enableZoom={draggingIndex === null} />
