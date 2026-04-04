@@ -1,6 +1,6 @@
 import React, { useState, Suspense, useEffect } from "react";
-import { Canvas } from "@react-three/fiber";
-import { XR, ARButton, createXRStore } from "@react-three/xr";
+import { Canvas, useThree } from "@react-three/fiber";
+import { XR, ARButton, createXRStore, useXR } from "@react-three/xr";
 import { useGLTF, OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 
@@ -62,8 +62,133 @@ function Model({ url, position, index, draggable, onPointerDown, onPointerMove, 
   );
 }
 
-function Scene({ models, placed, selectedIndex, onDragStart, onDragMove, onDragEnd, onLoadSize }: { models: string[]; placed: { url: string; position: THREE.Vector3 }[]; selectedIndex: number; onDragStart: (i:number, e:any)=>void; onDragMove: (i:number, e:any)=>void; onDragEnd: (i:number, e:any)=>void; onLoadSize: (i:number, size:THREE.Vector3)=>void }) {
+function Scene({ models, placed, selectedIndex, onDragStart, onDragMove, onDragEnd, onLoadSize, onPlaceAt }: { models: string[]; placed: { url: string; position: THREE.Vector3 }[]; selectedIndex: number; onDragStart: (i:number, e:any)=>void; onDragMove: (i:number, e:any)=>void; onDragEnd: (i:number, e:any)=>void; onLoadSize: (i:number, size:THREE.Vector3)=>void; onPlaceAt: (pos:THREE.Vector3)=>void }) {
   const preview = placed.length === 0 && models && models.length > 0;
+  const { gl } = useThree();
+  const { session, isPresenting } = useXR();
+
+  // Setup hit-test based dragging when an XR session is active
+  React.useEffect(() => {
+    if (!gl || !gl.xr) return;
+    const xrSession = gl.xr.getSession();
+    if (!xrSession) return;
+
+    let hitTestSource: any = null;
+    let refSpace: any = null;
+    let viewerSpace: any = null;
+
+    let mounted = true;
+
+    Promise.all([
+      xrSession.requestReferenceSpace('viewer').then((s:any) => { viewerSpace = s; return viewerSpace; }),
+      xrSession.requestReferenceSpace('local').then((s:any) => { refSpace = s; return refSpace; })
+    ]).then(() => {
+      if (!mounted) return;
+      if (viewerSpace) {
+        xrSession.requestHitTestSource({ space: viewerSpace }).then((src:any) => { hitTestSource = src; }).catch(() => {});
+      }
+    }).catch(() => {});
+
+    const onSelectStart = (ev: any) => {
+      try {
+        const frame = ev.frame as XRFrame;
+        if (!frame || !hitTestSource || !refSpace) return;
+        const results = frame.getHitTestResults(hitTestSource);
+        if (results.length > 0) {
+          const pose = results[0].getPose(refSpace);
+          if (pose) {
+            const pos = new THREE.Vector3(pose.transform.position.x, pose.transform.position.y, pose.transform.position.z);
+            // choose nearest placed object
+            let minDist = Infinity; let nearest = -1;
+            placed.forEach((p, idx) => {
+              const d = p.position.distanceTo(pos);
+              if (d < minDist) { minDist = d; nearest = idx; }
+            });
+            const selectionThreshold = 0.8; // meters
+            if (nearest !== -1 && minDist < selectionThreshold) {
+              // start dragging the nearest object
+              onDragStart(nearest, { point: pos });
+            } else {
+              // not near an existing object => place selected model at hit position
+              onPlaceAt(pos);
+            }
+          }
+        }
+      } catch (err) {
+        // ignore
+      }
+    };
+
+    xrSession.addEventListener('selectstart', onSelectStart);
+    const onSelectEnd = (ev: any) => {
+      try {
+        // simply end any drag in parent by calling onDragEnd with nearest index
+        const frame = ev.frame as XRFrame;
+        if (!frame || !hitTestSource || !refSpace) return;
+        const results = frame.getHitTestResults(hitTestSource);
+        if (results.length > 0) {
+          const pose = results[0].getPose(refSpace);
+          if (pose) {
+            const pos = new THREE.Vector3(pose.transform.position.x, pose.transform.position.y, pose.transform.position.z);
+            let minDist = Infinity; let nearest = -1;
+            placed.forEach((p, idx) => {
+              const d = p.position.distanceTo(pos);
+              if (d < minDist) { minDist = d; nearest = idx; }
+            });
+            if (nearest !== -1) onDragEnd(nearest, {});
+          }
+        }
+      } catch (err) {}
+    };
+    xrSession.addEventListener('selectend', onSelectEnd);
+
+    let rafHandle: any = null;
+    const onXRFrame = (time: any, xrFrame: XRFrame) => {
+      try {
+        // if any object is being dragged, update its position from hit test
+        // find dragging index by comparing last known placed positions (we use parent state via closure)
+        // We will search for an object where onDragStart was called earlier by parent stored draggingIndex; parent maintains draggingIndex state
+        // Instead of reading parent's draggingIndex directly, call get placed and compute if any object was marked as moving by proximity.
+        // Simpler: always perform hit test and if a dragging index exists in parent (we detect via placed array changes), parent has set draggingIndex via onDragStart
+        // We'll rely on onDragStart having been called to set draggingIndex in parent; here we'll call hitTest and if parent has an active drag (we detect via comparing previous placed vs current?), to keep code simple we'll always update all placed positions for which distance to hit point is < 2 and let parent handle index match.
+        if (!xrFrame || !hitTestSource || !refSpace) {
+          xrSession.requestAnimationFrame(onXRFrame);
+          return;
+        }
+
+        const results = xrFrame.getHitTestResults(hitTestSource);
+        if (results.length > 0) {
+          const pose = results[0].getPose(refSpace);
+          if (pose) {
+            const pos = new THREE.Vector3(pose.transform.position.x, pose.transform.position.y, pose.transform.position.z);
+            // call onDragMove for any placed object that is currently closest to the camera pointer
+            // find nearest placed object to this hit point within threshold and call onDragMove
+            let minDist = Infinity; let nearest = -1;
+            placed.forEach((p, idx) => {
+              const d = p.position.distanceTo(pos);
+              if (d < minDist) { minDist = d; nearest = idx; }
+            });
+            if (nearest !== -1 && minDist < 2.0) {
+              onDragMove(nearest, { point: pos });
+            }
+          }
+        }
+      } catch (err) {
+        // ignore per-frame errors
+      }
+      rafHandle = xrSession.requestAnimationFrame(onXRFrame);
+    };
+
+    rafHandle = xrSession.requestAnimationFrame(onXRFrame);
+
+    return () => {
+      mounted = false;
+      try { xrSession.removeEventListener('selectstart', onSelectStart); } catch {}
+      try { xrSession.removeEventListener('selectend', onSelectEnd); } catch {}
+      try { if (hitTestSource) hitTestSource.cancel(); } catch {}
+      try { if (rafHandle) xrSession.cancelAnimationFrame?.(rafHandle); } catch {}
+    };
+  }, [gl, placed, onDragStart, onDragMove, onPlaceAt]);
 
   return (
     <>
@@ -147,6 +272,11 @@ export default function MultiARScene({ models }: { models: string[] }) {
       copy[index] = size;
       return copy;
     });
+  };
+
+  const handlePlaceAt = (pos: THREE.Vector3) => {
+    const model = models[selectedIndex];
+    setPlaced(prev => [...prev, { url: model, position: pos.clone() }]);
   };
 
   useEffect(() => {
@@ -380,7 +510,7 @@ export default function MultiARScene({ models }: { models: string[] }) {
       <Canvas camera={{ position: [0, 1.5, 3], fov: 50 }} style={{ touchAction: 'none' }}>
         <XR store={store}>
               <Suspense fallback={null}>
-                <Scene models={models} placed={placed} selectedIndex={selectedIndex} onDragStart={onDragStart} onDragMove={onDragMove} onDragEnd={onDragEnd} onLoadSize={onLoadSize} />
+                <Scene models={models} placed={placed} selectedIndex={selectedIndex} onDragStart={onDragStart} onDragMove={onDragMove} onDragEnd={onDragEnd} onLoadSize={onLoadSize} onPlaceAt={handlePlaceAt} />
               </Suspense>
           </XR>
           <OrbitControls enableRotate={draggingIndex === null} enablePan={draggingIndex === null} enableZoom={draggingIndex === null} />
